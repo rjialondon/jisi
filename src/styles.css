@@ -1,0 +1,4 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; }
+body { background: #f2ead6; font-family: "Noto Serif SC", "Songti SC", serif; color: #2c2417; -webkit-tap-highlight-color: transparent; }
+a { color: inherit; text-decoration: none; }
