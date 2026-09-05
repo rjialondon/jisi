@@ -3,10 +3,9 @@ import TaijiTai from "./stages/TaijiTai.jsx";
 import ZhouTianTai from "./stages/ZhouTianTai.jsx";
 import GuaTai from "./stages/GuaTai.jsx";
 
-// 单页演示：三台顶部切换，无门厅、无说明。
+// 单页演示：桌面顶部切台，窄屏底部切台。
 // 各台自占四角——台名左上、控制台右上、仪表左下、缩放右下；正上方留空，切换条即落于此。
-// 只挂当前一台：各台 useEffect 归还处已备 cancelAnimationFrame + renderer.dispose()，
-// 故切台即真卸载，不积压 WebGL 上下文。
+// 只挂当前一台：共用台控撤监听、停帧，并释放几何、材质、纹理和绘图上下文。
 const 台 = [
   { key: "taiji", name: "太 极", Comp: TaijiTai },
   { key: "zhoutian", name: "周 天", Comp: ZhouTianTai },
@@ -21,6 +20,8 @@ export default function App() {
   return (
     <>
       <nav
+        className="stage-nav"
+        aria-label="选择演示台"
         style={{
           position: "fixed",
           top: 10,
@@ -41,6 +42,7 @@ export default function App() {
           return (
             <button
               key={t.key}
+              aria-pressed={on}
               onClick={() => 设活(t.key)}
               style={{
                 fontSize: 13,

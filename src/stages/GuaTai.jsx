@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from "react";
 import * as THREE from "three";
+import { 建立台控 } from "../shared/stageRuntime.js";
 
 // ═══════════════════════════════════════════
 //  卦 台 v7(整铸版)
@@ -205,13 +206,12 @@ function drawSplit(cv) {
 
 export default function GuaTai() {
   const mountRef = useRef(null);
+  const 台控Ref = useRef(null);
   const layersRef = useRef({});
   const autoSpinRef = useRef(true);
   const resetRef = useRef(() => {});
   const hudRef = useRef(null);
-  const cameraRef = useRef(null);
   const zoomSliderRef = useRef(null);
-  const sliderActiveRef = useRef(false);
   const baguaRef = useRef(null);
   const daNuoYiRef = useRef(() => {});
   const [nuoyi, setNuoyi] = React.useState(false);
@@ -256,7 +256,6 @@ export default function GuaTai() {
     const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 100);
     camera.position.set(4.2, 3.2, 5.2);
     camera.lookAt(0, 0, 0);
-    cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(W, H);
@@ -342,155 +341,52 @@ export default function GuaTai() {
 
     layersRef.current = { 0: layer0, 1: layer1, 2: layer2 };
 
-    // ——— 四元数轨迹球 ———
-    let dragging = false;
-    let lastX = 0,
-      lastY = 0;
-    let velX = 0.004,
-      velY = 0;
-    const tmpQ = new THREE.Quaternion();
-    const rotateWorld = (ax, ay) => {
-      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
-      const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
-      world.quaternion.premultiply(tmpQ.setFromAxisAngle(up, ax));
-      world.quaternion.premultiply(tmpQ.setFromAxisAngle(right, ay));
-    };
-    const onDown = (x, y) => {
-      dragging = true;
-      lastX = x;
-      lastY = y;
-    };
-    const onMove = (x, y) => {
-      if (!dragging) return;
-      const dx = x - lastX;
-      const dy = y - lastY;
-      rotateWorld(dx * 0.008, dy * 0.008);
-      velX = dx * 0.0008;
-      velY = dy * 0.0008;
-      lastX = x;
-      lastY = y;
-    };
-    const onUp = () => (dragging = false);
-
-    const initCam = camera.position.clone();
-    resetRef.current = () => {
-      world.rotation.set(0, 0, 0);
-      camera.position.copy(initCam);
-      camera.lookAt(0, 0, 0);
-      velX = autoSpinRef.current ? 0.004 : 0;
-      velY = 0;
-    };
-
-    // ═══ 乾坤大挪移 ═══
-    // 法理:阴鱼 = 阳鱼之点反演(无极翻转像);点反演 = 地镜 ∘ 绕地轴180°。
-    // 平面太极中两鱼互为【旋转180°】而非镜像 —— 故施阴鱼一记【地镜】(拆掉圆图的装订),
-    // 阴鱼即化为阳鱼之绕地轴C2像;再将机位跳至地+轴正望,两鱼同面显形:天地合,阴阳交。
-    daNuoYiRef.current = (on) => {
-      yinFish.scale.x = on ? -1 : 1;      // 地镜:关于地=0面反射
-      if (on) {
-        world.rotation.set(0, 0, 0);
-        camera.position.set(7.4, 0.0001, 0); // 机位:地+轴正望
+    const 台控 = 建立台控({
+      mount, scene, world, camera, renderer, hudRef, zoomSliderRef, autoSpinRef,
+    });
+    台控Ref.current = 台控;
+    // 保留原展示构形：阴鱼施地镜（地=0面反射），机位跳地+正望。
+    // 本轮只补操作前机位与自转的存还，不以交互修订重判原几何解释。
+    let 挪移前 = null;
+    daNuoYiRef.current = (开) => {
+      if (开) {
+        挪移前 = 台控.存机位();
+        yinFish.scale.x = -1;
+        world.quaternion.identity();
+        camera.position.set(7.4, 0.0001, 0);
         camera.lookAt(0, 0, 0);
         autoSpinRef.current = false;
-        velX = 0;
-        velY = 0;
+        setAutoSpin(false);
+        台控.清余速();
+      } else if (挪移前) {
+        yinFish.scale.x = 1;
+        台控.还机位(挪移前);
+        setAutoSpin(挪移前.自转);
+        挪移前 = null;
       }
     };
-
-    const md = (e) => onDown(e.clientX, e.clientY);
-    const mm = (e) => onMove(e.clientX, e.clientY);
-    let pinchDist = 0;
-    const touchGap = (e) => {
-      const dx = e.touches[0].clientX - e.touches[1].clientX;
-      const dy = e.touches[0].clientY - e.touches[1].clientY;
-      return Math.hypot(dx, dy);
+    resetRef.current = () => {
+      for (const 层 of Object.values(layersRef.current)) 层.visible = true;
+      setVis({ 0: true, 1: true, 2: true });
+      autoSpinRef.current = true;
+      setAutoSpin(true);
+      yinFish.scale.x = 1;
+      挪移前 = null;
+      setNuoyi(false);
+      setShowBagua(true);
+      setShowMirror(true);
+      台控.复位();
     };
-    const ts = (e) => {
-      if (e.touches.length === 2) {
-        dragging = false;
-        pinchDist = touchGap(e);
-      } else {
-        onDown(e.touches[0].clientX, e.touches[0].clientY);
-      }
-    };
-    const tm = (e) => {
-      e.preventDefault();
-      if (e.touches.length === 2) {
-        const nd = touchGap(e);
-        if (pinchDist > 0) {
-          camera.position.multiplyScalar(pinchDist / nd);
-          camera.position.clampLength(2.5, 40);
-        }
-        pinchDist = nd;
-      } else {
-        onMove(e.touches[0].clientX, e.touches[0].clientY);
-      }
-    };
-
-    renderer.domElement.addEventListener("mousedown", md);
-    window.addEventListener("mousemove", mm);
-    window.addEventListener("mouseup", onUp);
-    renderer.domElement.addEventListener("touchstart", ts, { passive: true });
-    renderer.domElement.addEventListener("touchmove", tm, { passive: false });
-    renderer.domElement.addEventListener("touchend", onUp);
-
-    const wheel = (e) => {
-      e.preventDefault();
-      camera.position.multiplyScalar(e.deltaY > 0 ? 1.07 : 0.93);
-      camera.position.clampLength(2.5, 40);
-    };
-    renderer.domElement.addEventListener("wheel", wheel, { passive: false });
-
-    let raf;
-    const animate = () => {
-      raf = requestAnimationFrame(animate);
-      if (!dragging) {
-        if (autoSpinRef.current) {
-          rotateWorld(velX, velY);
-          velX *= 0.98;
-          velY *= 0.98;
-          if (Math.abs(velX) < 0.0015) velX = 0.0015;
-        } else {
-          velX = 0;
-          velY = 0;
-        }
-      }
-      if (hudRef.current) {
-        const inv = world.quaternion.clone().invert();
-        const p = camera.position.clone().applyQuaternion(inv);
-        const dist = p.length();
-        const u = p.clone().normalize();
-        hudRef.current.textContent =
-          "地 " + (u.x >= 0 ? "+" : "") + u.x.toFixed(3) +
-          "  天 " + (u.y >= 0 ? "+" : "") + u.y.toFixed(3) +
-          "  人 " + (u.z >= 0 ? "+" : "") + u.z.toFixed(3) +
-          "  距 " + dist.toFixed(2);
-        if (zoomSliderRef.current && !sliderActiveRef.current) {
-          zoomSliderRef.current.value = dist.toFixed(1);
-        }
-      }
-      renderer.render(scene, camera);
-    };
-    animate();
-
-    const onResize = () => {
-      const w = mount.clientWidth,
-        h = mount.clientHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-    };
-    window.addEventListener("resize", onResize);
-
     return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("mousemove", mm);
-      window.removeEventListener("mouseup", onUp);
-      renderer.dispose();
-      mount.removeChild(renderer.domElement);
+      台控.收台();
+      台控Ref.current = null;
+      layersRef.current = {};
+      resetRef.current = () => {};
+      daNuoYiRef.current = () => {};
     };
   }, []);
+
+  useEffect(() => { 台控Ref.current?.唤醒(); }, [autoSpin, vis]);
 
   const btn = (active, activeBg, activeBorder) => ({
     padding: "9px 8px",
@@ -506,9 +402,9 @@ export default function GuaTai() {
 
   return (
     <div
+      className="stage"
       style={{
         width: "100%",
-        height: "100vh",
         position: "relative",
         background: "#f2ead6",
         fontFamily: "'Courier New', monospace",
@@ -534,6 +430,7 @@ export default function GuaTai() {
       {/* 左上:先天圆图基准盘(HUD) */}
       {showBagua && (
         <div
+          className="gua-reference"
           style={{
             position: "absolute",
             left: 12,
@@ -557,6 +454,7 @@ export default function GuaTai() {
       {/* 左上其二:先天圆图 · 左右镜像(单独盘) */}
       {showMirror && (
         <div
+          className={`gua-reference ${showBagua ? "gua-split-after" : ""}`}
           style={{
             position: "absolute",
             left: 12,
@@ -593,6 +491,7 @@ export default function GuaTai() {
       >
         <button
           onClick={() => setMenuOpen((o) => !o)}
+          aria-expanded={menuOpen}
           style={{
             padding: "10px 16px",
             borderRadius: 12,
@@ -609,6 +508,7 @@ export default function GuaTai() {
         </button>
         {menuOpen && (
           <div
+            className="stage-panel"
             style={{
               width: 190,
               background: "rgba(242,234,214,0.96)",
@@ -624,7 +524,7 @@ export default function GuaTai() {
               {autoSpin ? "自转 · 开" : "视角锁定 🔒"}
             </button>
             <button onClick={() => resetRef.current()} style={btn(false)}>
-              ⟲ 复位
+              ⟲ 全台复位
             </button>
             <button onClick={() => toggleLayer(0)} style={btn(vis[0])}>
               0 · 天地人三轴
@@ -637,11 +537,8 @@ export default function GuaTai() {
             </button>
             <button
               onClick={() => {
-                setNuoyi((s) => {
-                  daNuoYiRef.current(!s);
-                  if (!s) setAutoSpin(false);
-                  return !s;
-                });
+                daNuoYiRef.current(!nuoyi);
+                setNuoyi(!nuoyi);
               }}
               style={btn(nuoyi, "#7a1f1f", "#7a1f1f")}
             >
@@ -649,7 +546,7 @@ export default function GuaTai() {
             </button>
             <div style={{ fontSize: 10, color: "#9a9078", lineHeight: 1.5 }}>
               法理:阴鱼施地镜(拆装订)
-              <br />机位跳地+正望 · 再按即还原
+              <br />机位跳地+正望 · 再按恢复操作前机位与自转
             </div>
             <button
               onClick={() => setShowBagua((s) => !s)}
@@ -674,6 +571,7 @@ export default function GuaTai() {
 
       {/* 左下:机位仪表 */}
       <div
+        className="stage-hud"
         ref={hudRef}
         style={{
           position: "absolute",
@@ -695,6 +593,7 @@ export default function GuaTai() {
 
       {/* 右下:缩放滑杆 */}
       <div
+        className="stage-zoom"
         style={{
           position: "absolute",
           right: 12,
@@ -717,13 +616,10 @@ export default function GuaTai() {
           max="40"
           step="0.1"
           defaultValue="7.4"
-          onPointerDown={() => (sliderActiveRef.current = true)}
-          onPointerUp={() => (sliderActiveRef.current = false)}
-          onTouchStart={() => (sliderActiveRef.current = true)}
-          onTouchEnd={() => (sliderActiveRef.current = false)}
+          aria-label="观察距离"
           onInput={(e) => {
             const v = parseFloat(e.target.value);
-            if (cameraRef.current) cameraRef.current.position.setLength(v);
+            台控Ref.current?.缩放(v);
           }}
           style={{ width: 110, accentColor: "#3a3324" }}
         />
