@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from "react";
 import * as THREE from "three";
+import { 建立台控 } from "../shared/stageRuntime.js";
 
 // ——— 三维坐标系:x/y/z 三轴,各有正负方向 ———
 // 实线 + 箭头 = 正方向;虚线 = 负方向
@@ -166,6 +167,7 @@ function makeAxis(scene, dir, color, labelPos, labelNeg) {
 
 export default function XYZAxes() {
   const mountRef = useRef(null);
+  const 台控Ref = useRef(null);
   const layersRef = useRef({});
   const fishRef = useRef([]); // 三个太极盘,供引擎驱动
   const autoSpinRef = useRef(true); // 整体视角自转
@@ -179,17 +181,20 @@ export default function XYZAxes() {
   const [sec, setSec] = React.useState(null); // 当前展开的分组: view | engine | layers
   const flipSec = (k) => setSec((s) => (s === k ? null : k));
 
+  const [机位, 设机位] = React.useState(0);
+  const 设圆化 = (开) => {
+    setLens(开);
+    if (canvasElRef.current) {
+      canvasElRef.current.style.transformOrigin = "50% 50%";
+      canvasElRef.current.style.transform = 开 ? "scaleY(1.41421)" : "none";
+    }
+  };
+  const 离开显影 = () => {
+    设机位(0);
+    设圆化(false);
+  };
   const toggleLens = () => {
-    setLens((s) => {
-      const next = !s;
-      if (canvasElRef.current) {
-        canvasElRef.current.style.transformOrigin = "50% 50%";
-        canvasElRef.current.style.transform = next
-          ? "scaleY(1.41421)" // 沿短轴拉伸 √2:椭圆 → 正圆
-          : "none";
-      }
-      return next;
-    });
+    if (机位 === 1 && !autoSpinRef.current) 设圆化(!lens);
   };
   const [vis, setVis] = React.useState({ 0: true, 1: true, 2: true, 3: true });
   const [autoSpin, setAutoSpin] = React.useState(true);
@@ -197,6 +202,7 @@ export default function XYZAxes() {
   const [speed, setSpeed] = React.useState(1);
 
   const toggleAutoSpin = () => {
+    if (!autoSpinRef.current) 离开显影();
     setAutoSpin((s) => {
       autoSpinRef.current = !s;
       return !s;
@@ -330,152 +336,56 @@ export default function XYZAxes() {
     // 注册三个太极盘,供引擎同步驱动(各绕自身法线轴)
     fishRef.current = [taiji1, taiji2, taiji3];
 
-    // 记录初始状态,供复位:三盘相位 + 世界姿态 + 相机
-    const initQuats = fishRef.current.map((f) => f.quaternion.clone());
-    const initCam = camera.position.clone();
-
-    // ——— 手动拖拽旋转(四元数轨迹球,无万向节死锁) ———
-    let dragging = false;
-    let lastX = 0,
-      lastY = 0;
-    let velX = 0.004,
-      velY = 0; // 初始缓慢自转
-
-    const tmpQ = new THREE.Quaternion();
-    const rotateWorld = (ax, ay) => {
-      // 绕相机的"上"与"右"方向转世界,任何姿态都不卡
-      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
-      const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
-      world.quaternion.premultiply(tmpQ.setFromAxisAngle(up, ax));
-      world.quaternion.premultiply(tmpQ.setFromAxisAngle(right, ay));
-    };
-
-    const onDown = (x, y) => {
-      dragging = true;
-      lastX = x;
-      lastY = y;
-    };
-    const onMove = (x, y) => {
-      if (!dragging) return;
-      const dx = x - lastX;
-      const dy = y - lastY;
-      rotateWorld(dx * 0.008, dy * 0.008);
-      velX = dx * 0.0008;
-      velY = dy * 0.0008;
-      lastX = x;
-      lastY = y;
-    };
-    const onUp = () => (dragging = false);
-
-    // 复位:三盘回到初始相位,世界摆正,相机归位,余速清零(不动开关状态)
-    resetRef.current = () => {
-      fishRef.current.forEach((f, i) => f.quaternion.copy(initQuats[i]));
-      world.rotation.set(0, 0, 0);
-      camera.position.copy(initCam);
-      camera.lookAt(0, 0, 0);
-      velX = autoSpinRef.current ? 0.004 : 0;
-      velY = 0;
-    };
-
-    // 机位1:地天平分线(面对角线) → 相机立于 (1,1,0)/√2,两盘投影为同一椭圆
-    // 机位2:体对角线 → 相机立于 (1,1,-1)/√3,三轴等距120°,分体尽显
-    snapRef.current = (which = 1) => {
-      world.rotation.set(0, 0, 0); // 世界摆正,保证方向是真方向
-      const dist = 7.4;
-      if (which === 1) {
-        const s = dist / Math.sqrt(2);
-        camera.position.set(s, s, 0);
-      } else {
-        const s = dist / Math.sqrt(3);
-        camera.position.set(s, s, -s);
-      }
-      camera.lookAt(0, 0, 0);
-      velX = 0;
-      velY = 0;
-    };
-
-    const md = (e) => onDown(e.clientX, e.clientY);
-    const mm = (e) => onMove(e.clientX, e.clientY);
-    const ts = (e) => onDown(e.touches[0].clientX, e.touches[0].clientY);
-    const tm = (e) => {
-      e.preventDefault();
-      onMove(e.touches[0].clientX, e.touches[0].clientY);
-    };
-
-    renderer.domElement.addEventListener("mousedown", md);
-    window.addEventListener("mousemove", mm);
-    window.addEventListener("mouseup", onUp);
-    renderer.domElement.addEventListener("touchstart", ts, { passive: true });
-    renderer.domElement.addEventListener("touchmove", tm, { passive: false });
-    renderer.domElement.addEventListener("touchend", onUp);
-
-    // 滚轮缩放
-    const wheel = (e) => {
-      e.preventDefault();
-      camera.position.multiplyScalar(e.deltaY > 0 ? 1.07 : 0.93);
-      camera.position.clampLength(2.5, 20);
-    };
-    renderer.domElement.addEventListener("wheel", wheel, { passive: false });
-
-    let raf;
-    const animate = () => {
-      raf = requestAnimationFrame(animate);
-      if (!dragging) {
-        if (autoSpinRef.current) {
-          rotateWorld(velX, velY);
-          velX *= 0.98;
-          velY *= 0.98;
-          if (Math.abs(velX) < 0.0015) velX = 0.0015; // 保持一点点自转
-        } else {
-          velX = 0;
-          velY = 0; // 视角锁死,纹丝不动
+    const 初相位 = fishRef.current.map((鱼) => 鱼.quaternion.clone());
+    const 台控 = 建立台控({
+      mount, scene, world, camera, renderer, hudRef, autoSpinRef, 最远: 20,
+      转向: 离开显影,
+      持续行功: () => engineRef.current.on,
+      行功: (秒) => {
+        if (engineRef.current.on) {
+          for (const 鱼 of fishRef.current) 鱼.rotateZ(-engineRef.current.speed * 0.6 * 秒);
         }
-      }
-      // ═══ 引擎:三层锁定同向同速,各绕自身法线正转 ═══
-      if (engineRef.current.on) {
-        const d = -engineRef.current.speed * 0.01; // 正转 = 从各轴正端看向原点为顺时针
-        for (const f of fishRef.current) f.rotateZ(d);
-      }
-      // ═══ 机位仪表:相机在"世界系"(天地人坐标)中的实时位置 ═══
-      if (hudRef.current) {
-        const inv = world.quaternion.clone().invert();
-        const p = camera.position.clone().applyQuaternion(inv);
-        const dist = p.length();
-        const u = p.clone().normalize();
-        hudRef.current.textContent =
-          `地 ${u.x >= 0 ? "+" : ""}${u.x.toFixed(3)}  ` +
-          `天 ${u.y >= 0 ? "+" : ""}${u.y.toFixed(3)}  ` +
-          `人 ${u.z >= 0 ? "+" : ""}${u.z.toFixed(3)}  ` +
-          `距 ${dist.toFixed(2)}`;
-      }
-      renderer.render(scene, camera);
+      },
+    });
+    台控Ref.current = 台控;
+    resetRef.current = () => {
+      fishRef.current.forEach((鱼, i) => 鱼.quaternion.copy(初相位[i]));
+      for (const 层 of Object.values(layersRef.current)) 层.visible = true;
+      setVis({ 0: true, 1: true, 2: true, 3: true });
+      engineRef.current = { on: false, speed: 1 };
+      setEngineOn(false);
+      setSpeed(1);
+      autoSpinRef.current = true;
+      setAutoSpin(true);
+      离开显影();
+      台控.复位();
     };
-    animate();
-
-    const onResize = () => {
-      const w = mount.clientWidth,
-        h = mount.clientHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+    snapRef.current = (哪台 = 1) => {
+      if (哪台 !== 1) 设圆化(false);
+      设机位(哪台);
+      world.quaternion.identity();
+      const s = 7.4 / Math.sqrt(哪台 === 1 ? 2 : 3);
+      camera.position.set(s, s, 哪台 === 1 ? 0 : -s);
+      camera.lookAt(0, 0, 0);
+      台控.清余速();
     };
-    window.addEventListener("resize", onResize);
-
     return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("mousemove", mm);
-      window.removeEventListener("mouseup", onUp);
-      renderer.dispose();
-      mount.removeChild(renderer.domElement);
+      台控.收台();
+      台控Ref.current = null;
+      canvasElRef.current = null;
+      layersRef.current = {};
+      fishRef.current = [];
+      resetRef.current = snapRef.current = () => {};
     };
   }, []);
 
+  useEffect(() => { 台控Ref.current?.唤醒(); }, [autoSpin, engineOn, vis]);
+
   return (
     <div
+      className="stage"
       style={{
         width: "100%",
-        height: "100vh",
         position: "relative",
         background: "#f2ead6",
         fontFamily: "'Courier New', monospace",
@@ -513,6 +423,7 @@ export default function XYZAxes() {
       >
         <button
           onClick={() => setMenuOpen((o) => !o)}
+          aria-expanded={menuOpen}
           style={{
             padding: "10px 16px",
             borderRadius: 12,
@@ -530,6 +441,7 @@ export default function XYZAxes() {
 
         {menuOpen && (
           <div
+            className="stage-panel"
             style={{
               width: 200,
               background: "rgba(242,234,214,0.96)",
@@ -606,6 +518,8 @@ export default function XYZAxes() {
                 </button>
                 <button
                   onClick={toggleLens}
+                  disabled={机位 !== 1 || autoSpin}
+                  aria-pressed={lens}
                   style={{
                     padding: "9px 8px", borderRadius: 8,
                     border: "1.5px solid #1f4d7a",
@@ -614,7 +528,7 @@ export default function XYZAxes() {
                     fontFamily: "inherit", fontSize: 12, cursor: "pointer",
                   }}
                 >
-                  ⊕ 圆化{lens ? " · 开" : ""}
+                  ⊕ 圆化{lens ? " · 拉伸显示中" : ""}
                 </button>
                 <button
                   onClick={() => resetRef.current()}
@@ -625,12 +539,13 @@ export default function XYZAxes() {
                     fontFamily: "inherit", fontSize: 12, cursor: "pointer",
                   }}
                 >
-                  ⟲ 复位
+                  ⟲ 全台复位
                 </button>
                 <div style={{ fontSize: 10, color: "#9a9078", lineHeight: 1.5 }}>
                   机位1=(1,1,0)/√2 面对角线,两鱼合为一图
                   <br />机位2=(1,1,−1)/√3 体对角线,两鱼永不相触
                   <br />到位皆自动锁视角 · 圆化仅配机位1
+                  <br />圆化会拉伸整幅画面；转动或换位即关闭
                 </div>
               </div>
             )}
@@ -732,8 +647,12 @@ export default function XYZAxes() {
         )}
       </div>
 
+      {lens && (
+        <div className="lens-notice" role="status">圆化 · 整幅画面拉伸显示，非原始比例</div>
+      )}
       {/* 左下:机位仪表(常驻) */}
       <div
+        className="stage-hud"
         ref={hudRef}
         style={{
           position: "absolute",

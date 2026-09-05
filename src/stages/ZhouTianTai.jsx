@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from "react";
 import * as THREE from "three";
+import { 建立台控 } from "../shared/stageRuntime.js";
 
 // ═══════════════════════════════════════════
 //  周 天 台
@@ -70,14 +71,13 @@ function makeAxis(parent, dir, color, labelPos, labelNeg) {
 
 export default function ZhouTianTai() {
   const mountRef = useRef(null);
+  const 台控Ref = useRef(null);
   const worldRef = useRef(null); // 世界组,后续一切造物挂在这里
   const layersRef = useRef({}); // 图层登记簿,随造物增补
   const autoSpinRef = useRef(true);
   const resetRef = useRef(() => {});
   const hudRef = useRef(null);
-  const cameraRef = useRef(null); // 相机,供外置缩放滑杆
   const zoomSliderRef = useRef(null); // 滑杆 DOM,动画帧内回写
-  const sliderActiveRef = useRef(false);
   const [autoSpin, setAutoSpin] = React.useState(true);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [vis, setVis] = React.useState({ 0: true, 1: true });
@@ -108,7 +108,6 @@ export default function ZhouTianTai() {
     const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 100);
     camera.position.set(4.2, 3.2, 5.2);
     camera.lookAt(0, 0, 0);
-    cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(W, H);
@@ -177,151 +176,33 @@ export default function ZhouTianTai() {
     layersRef.current = { 0: layer0, 1: layer1 };
     // ——— 729 点即位,坐标语义:(地,天,人) 各取 乾…宫…坤 ———
 
-    // ——— 四元数轨迹球旋转(无死角) ———
-    let dragging = false;
-    let lastX = 0,
-      lastY = 0;
-    let velX = 0.004,
-      velY = 0;
-
-    const tmpQ = new THREE.Quaternion();
-    const rotateWorld = (ax, ay) => {
-      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
-      const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
-      world.quaternion.premultiply(tmpQ.setFromAxisAngle(up, ax));
-      world.quaternion.premultiply(tmpQ.setFromAxisAngle(right, ay));
-    };
-
-    const onDown = (x, y) => {
-      dragging = true;
-      lastX = x;
-      lastY = y;
-    };
-    const onMove = (x, y) => {
-      if (!dragging) return;
-      const dx = x - lastX;
-      const dy = y - lastY;
-      rotateWorld(dx * 0.008, dy * 0.008);
-      velX = dx * 0.0008;
-      velY = dy * 0.0008;
-      lastX = x;
-      lastY = y;
-    };
-    const onUp = () => (dragging = false);
-
-    const initCam = camera.position.clone();
+    const 台控 = 建立台控({
+      mount, scene, world, camera, renderer, hudRef, zoomSliderRef, autoSpinRef,
+    });
+    台控Ref.current = 台控;
     resetRef.current = () => {
-      world.rotation.set(0, 0, 0);
-      camera.position.copy(initCam);
-      camera.lookAt(0, 0, 0);
-      velX = autoSpinRef.current ? 0.004 : 0;
-      velY = 0;
+      for (const 层 of Object.values(layersRef.current)) 层.visible = true;
+      setVis({ 0: true, 1: true });
+      autoSpinRef.current = true;
+      setAutoSpin(true);
+      台控.复位();
     };
-
-    const md = (e) => onDown(e.clientX, e.clientY);
-    const mm = (e) => onMove(e.clientX, e.clientY);
-
-    // 触屏:单指旋转,双指捏合缩放
-    let pinchDist = 0;
-    const touchGap = (e) => {
-      const dx = e.touches[0].clientX - e.touches[1].clientX;
-      const dy = e.touches[0].clientY - e.touches[1].clientY;
-      return Math.hypot(dx, dy);
-    };
-    const ts = (e) => {
-      if (e.touches.length === 2) {
-        dragging = false;
-        pinchDist = touchGap(e);
-      } else {
-        onDown(e.touches[0].clientX, e.touches[0].clientY);
-      }
-    };
-    const tm = (e) => {
-      e.preventDefault();
-      if (e.touches.length === 2) {
-        const nd = touchGap(e);
-        if (pinchDist > 0) {
-          camera.position.multiplyScalar(pinchDist / nd);
-          camera.position.clampLength(2.5, 40);
-        }
-        pinchDist = nd;
-      } else {
-        onMove(e.touches[0].clientX, e.touches[0].clientY);
-      }
-    };
-
-    renderer.domElement.addEventListener("mousedown", md);
-    window.addEventListener("mousemove", mm);
-    window.addEventListener("mouseup", onUp);
-    renderer.domElement.addEventListener("touchstart", ts, { passive: true });
-    renderer.domElement.addEventListener("touchmove", tm, { passive: false });
-    renderer.domElement.addEventListener("touchend", onUp);
-
-    const wheel = (e) => {
-      e.preventDefault();
-      camera.position.multiplyScalar(e.deltaY > 0 ? 1.07 : 0.93);
-      camera.position.clampLength(2.5, 40);
-    };
-    renderer.domElement.addEventListener("wheel", wheel, { passive: false });
-
-    let raf;
-    const animate = () => {
-      raf = requestAnimationFrame(animate);
-      if (!dragging) {
-        if (autoSpinRef.current) {
-          rotateWorld(velX, velY);
-          velX *= 0.98;
-          velY *= 0.98;
-          if (Math.abs(velX) < 0.0015) velX = 0.0015;
-        } else {
-          velX = 0;
-          velY = 0;
-        }
-      }
-      // 机位仪表:相机在世界系(天地人)中的实时方向
-      if (hudRef.current) {
-        const inv = world.quaternion.clone().invert();
-        const p = camera.position.clone().applyQuaternion(inv);
-        const dist = p.length();
-        const u = p.clone().normalize();
-        hudRef.current.textContent =
-          `地 ${u.x >= 0 ? "+" : ""}${u.x.toFixed(3)}  ` +
-          `天 ${u.y >= 0 ? "+" : ""}${u.y.toFixed(3)}  ` +
-          `人 ${u.z >= 0 ? "+" : ""}${u.z.toFixed(3)}  ` +
-          `距 ${dist.toFixed(2)}`;
-        // 滑杆回写(手没按着的时候)
-        if (zoomSliderRef.current && !sliderActiveRef.current) {
-          zoomSliderRef.current.value = dist.toFixed(1);
-        }
-      }
-      renderer.render(scene, camera);
-    };
-    animate();
-
-    const onResize = () => {
-      const w = mount.clientWidth,
-        h = mount.clientHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-    };
-    window.addEventListener("resize", onResize);
-
     return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("mousemove", mm);
-      window.removeEventListener("mouseup", onUp);
-      renderer.dispose();
-      mount.removeChild(renderer.domElement);
+      台控.收台();
+      台控Ref.current = null;
+      layersRef.current = {};
+      resetRef.current = () => {};
+      worldRef.current = null;
     };
   }, []);
 
+  useEffect(() => { 台控Ref.current?.唤醒(); }, [autoSpin, vis]);
+
   return (
     <div
+      className="stage"
       style={{
         width: "100%",
-        height: "100vh",
         position: "relative",
         background: "#f2ead6",
         fontFamily: "'Courier New', monospace",
@@ -359,6 +240,7 @@ export default function ZhouTianTai() {
       >
         <button
           onClick={() => setMenuOpen((o) => !o)}
+          aria-expanded={menuOpen}
           style={{
             padding: "10px 16px",
             borderRadius: 12,
@@ -375,6 +257,7 @@ export default function ZhouTianTai() {
         </button>
         {menuOpen && (
           <div
+            className="stage-panel"
             style={{
               width: 190,
               background: "rgba(242,234,214,0.96)",
@@ -414,7 +297,7 @@ export default function ZhouTianTai() {
                 cursor: "pointer",
               }}
             >
-              ⟲ 复位
+              ⟲ 全台复位
             </button>
             {[
               { i: 0, label: "0 · 天地人三轴" },
@@ -450,6 +333,7 @@ export default function ZhouTianTai() {
 
       {/* 左下:机位仪表(常驻) */}
       <div
+        className="stage-hud"
         ref={hudRef}
         style={{
           position: "absolute",
@@ -471,6 +355,7 @@ export default function ZhouTianTai() {
 
       {/* 右下:缩放滑杆(常驻,外置) */}
       <div
+        className="stage-zoom"
         style={{
           position: "absolute",
           right: 12,
@@ -493,13 +378,10 @@ export default function ZhouTianTai() {
           max="40"
           step="0.1"
           defaultValue="7.4"
-          onPointerDown={() => (sliderActiveRef.current = true)}
-          onPointerUp={() => (sliderActiveRef.current = false)}
-          onTouchStart={() => (sliderActiveRef.current = true)}
-          onTouchEnd={() => (sliderActiveRef.current = false)}
+          aria-label="观察距离"
           onInput={(e) => {
             const v = parseFloat(e.target.value);
-            if (cameraRef.current) cameraRef.current.position.setLength(v);
+            台控Ref.current?.缩放(v);
           }}
           style={{ width: 130, accentColor: "#3a3324" }}
         />
